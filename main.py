@@ -1,7 +1,7 @@
 # udp receiver for multicast
 import os
 import sys, socket, threading
-from PyQt6.QtGui import QFont, QPainter, QColor, QImage, QMouseEvent
+from PyQt6.QtGui import QFont, QPainter, QColor, QImage, QMouseEvent, QPen
 from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterType
 from PyQt6.QtQuick import QQuickPaintedItem
 from PyQt6.QtCore import Qt,QRectF,QRect,QSize,pyqtSlot,pyqtSignal,QTimer
@@ -320,40 +320,57 @@ class InfoViewer(QQuickPaintedItem):
 
         
             
-    @pyqtSlot(int,zss.Multicast_Status)
-    def paintInfo(self,n,info):
+    @pyqtSlot(int, zss.Multicast_Status)
+    def paintInfo(self, n, info):
         selectDir = self.infoReceiver.selected
-        
-        # ipForward_t = info.ip.split(".")[0] + "." + info.ip.split(".")[1] + "." + info.ip.split(".")[2]
-        
-        # global ipForward
-        
-        # ipForward = ipForward_t
-        
-        # fill background
-        if info.team == 1:
-            self.painter.setPen(QColor(255,255,255))
-            self.painter.setBrush(QColor(255,255,255))
-            self.painter.drawRect(QRectF(self._x(n,0.0), self._y(n,0.0), self._w(n,0.3),self._h(n,1.0)))
-            # infoDictLock.acquire()
-            self.painter.setPen(QColor(0,0,0) if n not in selectDir else QColor(255,0,0))
-            # infoDictLock.release()
-            self.painter.setBrush(Qt.BrushStyle.NoBrush)
-            self.painter.setFont(QFont('Arial', 10))
-            self.painter.drawRect(QRectF(self._x(n,0.005), self._y(n,0.05), self._w(n,0.29),self._h(n,0.9)))
-            self.painter.drawText(QRectF(self._x(n,0.0), self._y(n,0.0), self._w(n,0.3),self._h(n,1.0)), Qt.AlignmentFlag.AlignCenter, "{:d}".format(info.ip)+" : {:.0f}%".format((info.battery/10.0-7.0*2)/(2*8.4-2*7.0)*100)+",{:.1f}".format(info.infrared/10.0)+",{}".format(info.have_imu))
 
+        battery_v = info.battery / 10.0
+        battery_ratio = max(0.0, min((battery_v - 15.0) / (16.8 - 15.0), 1.0))
+        battery_percent = int(battery_ratio * 100)
+
+        # 时尚电量颜色：HSL 模式，饱和度高、亮度高，色相从红(0°)渐变到绿(120°)
+        hue = 120 * battery_ratio  # 0→红, 120→绿
+        label_color = QColor.fromHsl(int(hue), 245, 230)  # 饱和度255，亮度220(约86%)
+        fill_color = label_color  # 直接使用，不再额外提亮
+
+        if info.team == 1:
+            area_left = 0.0
+            selected = n in selectDir
         else:
-            self.painter.setPen(QColor(255,255,255))
-            self.painter.setBrush(QColor(255,255,255))
-            self.painter.drawRect(QRectF(self._x(n,0.65), self._y(n,0.0), self._w(n,0.3),self._h(n,1.0)))
-            # infoDictLock.acquire()
-            self.painter.setPen(QColor(0,0,0) if (n+16) not in selectDir else QColor(255,0,0))
-            # infoDictLock.release()
-            self.painter.setBrush(Qt.BrushStyle.NoBrush)
-            self.painter.setFont(QFont('Arial', 10))
-            self.painter.drawRect(QRectF(self._x(n,0.655), self._y(n,0.05), self._w(n,0.29),self._h(n,0.9)))
-            self.painter.drawText(QRectF(self._x(n,0.65), self._y(n,0.0), self._w(n,0.3),self._h(n,1.0)), Qt.AlignmentFlag.AlignCenter, "{:d}".format(info.ip)+" : {:.0f}%".format((info.battery/10.0-7.0*2)/(2*8.4-2*7.0)*100)+",{:.1f}".format(info.infrared/10.0)+",{}".format(info.have_imu))
+            area_left = 0.645
+            selected = (n + 16) in selectDir
+
+        # 阴影矩形（偏移量稍加大，颜色加深）
+        shadow_rect = QRectF(self._x(n, area_left + 0.014), self._y(n, 0.12),
+                            self._w(n, 0.29), self._h(n, 0.83))
+        # 卡片矩形（去掉白色背景 panel_rect）
+        card_rect = QRectF(self._x(n, area_left + 0.008), self._y(n, 0.06),
+                        self._w(n, 0.29), self._h(n, 0.82))
+
+        self.painter.setPen(Qt.PenStyle.NoPen)
+        # 绘制阴影（增强：颜色更深）
+        self.painter.setBrush(QColor(150, 150, 150, 100))
+        self.painter.drawRoundedRect(shadow_rect, 7.5, 7.5)
+
+        # 绘制彩色卡片
+        self.painter.setBrush(fill_color)
+
+        # 根据选中状态设置画笔：选中时用亮红色、宽度3；否则用深灰色、宽度1
+        if selected:
+            pen = QPen(QColor(255, 100, 100), 3)   # 亮红色，宽度3
+        else:
+            pen = QPen(QColor(45, 45, 45), 1)      # 深灰色，宽度1
+
+        self.painter.setPen(pen)
+        self.painter.drawRoundedRect(card_rect, 7.5, 7.5)
+
+        # 绘制文字（无阴影）
+        font = QFont('Arial', 10)
+        self.painter.setFont(font)
+        text = f"{info.ip}: {battery_percent}%,{info.infrared/10.0:.1f},{info.have_imu}"
+        self.painter.setPen(QColor(15, 15, 15))
+        self.painter.drawText(card_rect, Qt.AlignmentFlag.AlignCenter, text)
+
         self.update(self._area(n))
         
         
@@ -374,26 +391,38 @@ class InfoViewer(QQuickPaintedItem):
         pass
     
     @pyqtSlot(int,int)
-    def resize(self,width,height):
+    def resize(self, width, height):
         self.ready = False
-        if width <=0 or height <=0:
+        if width <= 0 or height <= 0:
             return
         if self.painter.isActive():
             self.painter.end()
-        self.image = QImage(QSize(width,height),QImage.Format.Format_ARGB32_Premultiplied)
+        self.image = QImage(QSize(width, height), QImage.Format.Format_ARGB32_Premultiplied)
         self.painter.begin(self.image)
         self.ready = True
+
         for n in range(16):
-            self.painter.setPen(QColor(50,50,50))
-            self.painter.setBrush(QColor(50,50,50))
-            self.painter.drawRect(QRectF(self._x(n,0.0), self._y(n,0.0), self._w(n,1),self._h(n,1.0)))
+            # 绘制整个槽位的灰色背景（保持不变）
+            self.painter.setPen(QColor(50, 50, 50))
+            self.painter.setBrush(QColor(50, 50, 50))
+            self.painter.drawRect(QRectF(self._x(n, 0.0), self._y(n, 0.0),
+                                        self._w(n, 1.0), self._h(n, 1.0)))
             self.update()
-            self.painter.setPen(QColor(0,0,0))
-            self.painter.setBrush(QColor(255,255,255))
-            self.painter.drawRect(QRectF(self._x(n,0.95), self._y(n,0.0), self._w(n,0.05),self._h(n,1.0)))
+
+            # 绘制右侧数字区域：灰色背景，白色边框加粗，白色文字
+            # 设置白色画笔，宽度1（加粗）
+            self.painter.setPen(QPen(QColor(200, 200, 200), 1))
+            # 设置灰色画刷（略亮于主背景，提高可读性）
+            self.painter.setBrush(QColor(70, 70, 70))
+            self.painter.drawRect(QRectF(self._x(n, 0.95), self._y(n, 0.0),
+                                        self._w(n, 0.05), self._h(n, 1.0)))
+
+            # 绘制白色数字
             self.painter.setFont(QFont('Helvetica', 11))
-            self.painter.setPen(QColor(0,0,0))
-            self.painter.drawText(QRectF(self._x(n,0.95), self._y(n,0.0), self._w(n,0.05),self._h(n,1.0)), Qt.AlignmentFlag.AlignCenter, format(n))
+            self.painter.setPen(QColor(255, 255, 255))  # 白色文字
+            self.painter.drawText(QRectF(self._x(n, 0.95), self._y(n, 0.0),
+                                        self._w(n, 0.05), self._h(n, 1.0)),
+                                Qt.AlignmentFlag.AlignCenter, format(n))
             self.update(self._area(n))
         
         
@@ -483,22 +512,30 @@ class InfoViewer(QQuickPaintedItem):
     @pyqtSlot(zss.Robot_Status)
     def paint_single_info(self,info):
         if self.initFinish:
-            self.painter.setPen(QColor(255,255,255))
+            # Base panel background by team color.
             if info.team == 1:
                 team = "蓝"
-                self.painter.setBrush(QColor(173, 216, 230))
+                panel_bg = QColor.fromHsl(240, 255, 150)
+                row_bg = QColor.fromHsl(240, 255, 235)
             else:
                 team = "黄"
-                self.painter.setBrush(QColor(255, 255, 153))
+                panel_bg = QColor.fromHsl(60, 255, 150)
+                row_bg = QColor.fromHsl(60, 255, 235)
+
+            self.painter.setPen(Qt.PenStyle.NoPen)
+            self.painter.setBrush(panel_bg)
             for i in range(16):
-                self.painter.drawRect(QRectF(self._x(i,0.30), self._y(i,0.0), self._w(i,0.35),self._h(i,1.0)))
-            #self.painter.drawRect(QRectF(self._x(10, 0.35), self._y(10, 0.0), self._w(10, 1.0), self._h(10, 1.0)))
-            self.painter.setFont(QFont('Helvetica', 11))
-            self.painter.setPen(QColor(0,0,0))
+                self.painter.drawRect(QRectF(self._x(i,0.302), self._y(i,0.0), self._w(i,0.346),self._h(i,1.0)))
+
+            # Use bold SimHei to keep style consistent with broadcast cards.
+            status_font = QFont('SimHei', 13)
+            # status_font.setBold(True)
+            self.painter.setFont(status_font)
 
             if self.pointtopointRecv.receive_flag:
 
-                battery_str = "{:.1f}".format(info.battery/10.0)
+                battery_v = info.battery / 10.0
+                battery_str = "{:.1f}".format(battery_v)
                 capacitance_str = "{:.1f}".format(info.capacitance/10.0)
                 if info.team ==1:
                     team="蓝"
@@ -515,39 +552,64 @@ class InfoViewer(QQuickPaintedItem):
                 wheel2_str = "{:.0f}".format(info.wheel_encoder[2])
                 wheel3_str = "{:.0f}".format(info.wheel_encoder[3])
                 infrared_str = "{:.0f}".format(info.infrared)
-                self.painter.drawText(QRectF(self._x(0, 0.35), self._y(0, 0.0), self._w(0, 1.0), self._h(0, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "车号： " + str(info.robot_id)+"                                  ")
-                self.painter.drawText(QRectF(self._x(1, 0.35), self._y(1, 0.0), self._w(1, 1.0), self._h(1, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "车队：  " + str(team)+"                                  ")
-                self.painter.drawText(QRectF(self._x(2, 0.35), self._y(2, 0.0), self._w(2, 1.0), self._h(2, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "0 号轮速度：  " + str(wheel0_str)+"                                  ")
-                self.painter.drawText(QRectF(self._x(3, 0.35), self._y(3, 0.0), self._w(3, 1.0), self._h(3, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "1 号轮速度：   " + str(wheel1_str)+"                                  ")
-                self.painter.drawText(QRectF(self._x(4, 0.35), self._y(4, 0.0), self._w(4, 1.0), self._h(4, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "2 号轮速度：   " + str(wheel2_str)+"                                  ")
-                self.painter.drawText(QRectF(self._x(5, 0.35), self._y(5, 0.0), self._w(5, 1.0), self._h(5, 1.0)),Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "3 号轮速度：   " + str(wheel3_str)+"                                  ")
-                self.painter.drawText(QRectF(self._x(6, 0.35), self._y(6, 0.0), self._w(6, 1.0), self._h(6, 1.0)),Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "电容电压/V " + capacitance_str+"                                  ")
-                self.painter.drawText(QRectF(self._x(7, 0.35), self._y(7, 0.0), self._w(7, 1.0), self._h(7, 1.0)),Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "电池电量/V " + battery_str+"                                  ")
-                self.painter.drawText(QRectF(self._x(8,0.35), self._y(8,0.0), self._w(8,1.0), self._h(8,1.0)),Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "红外时间 "+str(infrared_str)+"                                  ")
-                self.painter.drawText(QRectF(self._x(9, 0.35), self._y(9, 0.0), self._w(9, 1.0), self._h(9, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "x 轴角度 " + str(angle_x_str)+"                                  ")
-                self.painter.drawText(QRectF(self._x(10, 0.35), self._y(10, 0.0), self._w(10, 1.0), self._h(10, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "y 轴角度 " + str(angle_y_str)+"                                  ")
-                self.painter.drawText(QRectF(self._x(11, 0.35), self._y(11, 0.0), self._w(11, 1.0), self._h(11, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "z 轴角度 " + str(angle_z_str)+"                                  ")
+                # Draw one rounded label row with subtle shadow and optional highlight color.
+                def draw_info_row(idx, content, text_color=QColor(25, 25, 25), bg_color=row_bg):
+                    card_rect = QRectF(
+                        self._x(idx, 0.305),
+                        self._y(idx, 0.04),
+                        self._w(idx, 0.34),
+                        self._h(idx, 0.9),
+                    )
 
-                self.painter.drawText(QRectF(self._x(12, 0.35), self._y(12, 0.0), self._w(12, 1.0), self._h(12, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "x 轴角速度 " + w_x_str+"                                  ")
-                self.painter.drawText(QRectF(self._x(13, 0.35), self._y(13, 0.0), self._w(13, 1.0), self._h(13, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "y 轴角速度 " + w_y_str+"                                  ")
-                self.painter.drawText(QRectF(self._x(14, 0.35), self._y(14, 0.0), self._w(14, 1.0), self._h(14, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter, "z 轴加速度 " + w_z_str+"                                  ")
+                    # Add edge stroke for better contrast between rows.
+                    self.painter.setPen(QColor(110, 120, 130, 150))
+                    self.painter.setBrush(bg_color)
+                    self.painter.drawRoundedRect(card_rect, 8.0, 8.0)
+
+                    text_rect_shadow = QRectF(
+                        card_rect.x() + 1.2,
+                        card_rect.y() + 1.2,
+                        card_rect.width(),
+                        card_rect.height(),
+                    )
+                    self.painter.setPen(QColor(0, 0, 0, 70))
+                    # self.painter.drawText(
+                    #     text_rect_shadow,
+                    #     Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    #     "  " + content,
+                    # )
+
+                    self.painter.setPen(text_color)
+                    self.painter.drawText(
+                        card_rect,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                        "  " + content,
+                    )
+
+                rows = [
+                    (0, "车号: " + str(info.robot_id), QColor(10, 10, 10), row_bg),
+                    (1, "车队: " + str(team), QColor(10, 10, 10), row_bg),
+                    (2, "0 号轮速度: " + str(wheel0_str), QColor(10, 10, 10), row_bg),
+                    (3, "1 号轮速度: " + str(wheel1_str), QColor(10, 10, 10), row_bg),
+                    (4, "2 号轮速度: " + str(wheel2_str), QColor(10, 10, 10), row_bg),
+                    (5, "3 号轮速度: " + str(wheel3_str), QColor(10, 10, 10), row_bg),
+                    (6, "电容电压/V " + capacitance_str, QColor(10, 10, 10), row_bg),
+                    (7, "电池电量/V " + battery_str, QColor(10, 10, 10), row_bg),
+                    (8, "红外时间 " + str(infrared_str), QColor(10, 10, 10), row_bg),
+                    (9, "X 轴角度 " + str(angle_x_str), QColor(10, 10, 10), row_bg),
+                    (10, "Y 轴角度 " + str(angle_y_str), QColor(10, 10, 10), row_bg),
+                    (11, "Z 轴角度 " + str(angle_z_str), QColor(10, 10, 10), row_bg),
+                    (12, "X 轴角速度 " + w_x_str, QColor(10, 10, 10), row_bg),
+                    (13, "Y 轴角速度 " + w_y_str, QColor(10, 10, 10), row_bg),
+                    (14, "Z 轴加速度 " + w_z_str, QColor(10, 10, 10), row_bg),
+                ]
+
+                for idx, content, text_color, bg_color in rows:
+                    draw_info_row(idx, content, text_color, bg_color)
                 
                 global ipForward
-                
-                self.painter.drawText(QRectF(self._x(15, 0.35), self._y(15, 0.0), self._w(15, 1.0), self._h(15, 1.0)),
-                                    Qt.AlignmentFlag.AlignLeft| Qt.AlignmentFlag.AlignVCenter,
-                                    "ip : " + ipForward + "                                  ")
+
+                draw_info_row(15, "ip: " + ipForward, QColor(10, 10, 10), row_bg)
                 
                 global plotData
                 global plotInitFinish
