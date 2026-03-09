@@ -100,8 +100,11 @@ message Robot_Command {
     CommType comm_type = 12;
     repeated sint32 angle_pid = 13;
     bool need_change_team = 14;
-    bool isdebug = 15;
-    repeated sint32 wheel_pid = 16;
+    bool need_change_id = 15;
+    Team team_new = 16;
+    int32 id_new = 17;
+    bool isdebug = 18;
+    repeated sint32 wheel_pid = 19;
 }
 
 message Robot_Command_Mini{

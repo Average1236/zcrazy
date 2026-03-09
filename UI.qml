@@ -8,11 +8,10 @@ Rectangle{
     color:"transparent";
     id:radioRectangle;
     property var cmdSender;
-    property var needChangeTeamState;
 
     //下面大的Box
     ZGroupBox{
-        title : qsTr("66666") ;
+        title : qsTr("Control Panel");
         width:parent.width - 15;
         anchors.top:parent.top;
         anchors.topMargin:8;
@@ -77,7 +76,8 @@ Rectangle{
             property double angle : 0;
 
             property bool only_one : true;
-            property bool need_change_team : false;
+            property int team_new : 1;
+            property int id_new : 0;
             property bool control_all : false;
             property bool control_all_which_team : false; // 0 for blue,1 for yellow
 
@@ -239,13 +239,6 @@ Rectangle{
                 }
             }
 
-            ZText{ text:qsTr("change team [T]")  }
-            Button{ text:(needChangeTeamState ? qsTr("true") : qsTr("false")) ;width:parent.itemWidth;
-                // onClicked: {
-                //     parent.need_change_team = !parent.need_change_team;
-                // }
-            }
-
             ZText{ text:qsTr("control all [N]")  }
             Button{ text:(parent.control_all ? qsTr("true") : qsTr("false")) ;width:parent.itemWidth
                 onClicked: { 
@@ -258,6 +251,31 @@ Rectangle{
                 onClicked: { 
                     parent.control_all_which_team = !parent.control_all_which_team; 
                     }
+            }
+
+            ZText{ text:" " }
+            ZText{ text:" " }
+            ZText{ text:" " }
+            ZText{ text:" " }
+
+            ZText{ text:qsTr("team new")  }
+            SpinBox{ editable:true; from:1; to:2; value:parent.team_new; width:parent.itemWidth
+                onValueModified:{parent.team_new = value;}}
+
+            ZText{ text:qsTr("id new")  }
+            SpinBox{ editable:true; from:0; to:15; value:parent.id_new; width:parent.itemWidth
+                onValueModified:{parent.id_new = value;}}
+
+            Button{ text:qsTr("change team") ;width:parent.itemWidth
+                onClicked: {
+                    radioRectangle.cmdSender.changeTeam(parent.team_new);
+                }
+            }
+
+            Button{ text:qsTr("change id") ;width:parent.itemWidth
+                onClicked: {
+                    radioRectangle.cmdSender.changeId(parent.id_new);
+                }
             }
 
             //角度pid

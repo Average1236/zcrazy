@@ -1,23 +1,20 @@
 # udp receiver for multicast
-import sys, time, socket, struct, threading
-from PyQt6 import QtGui
-from PyQt6.QtGui import QGuiApplication, QFont, QPainter, QColor, QImage, QMouseEvent
-from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterType, qmlRegisterSingletonType
-from PyQt6.QtQuick import QQuickPaintedItem, QQuickItem
-from PyQt6.QtCore import Qt,QObject,QRectF,QRect,QSize,pyqtSlot,pyqtSignal
+import os
+import sys, socket, threading
+from PyQt6.QtGui import QFont, QPainter, QColor, QImage, QMouseEvent
+from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterType
+from PyQt6.QtQuick import QQuickPaintedItem
+from PyQt6.QtCore import Qt,QRectF,QRect,QSize,pyqtSlot,pyqtSignal,QTimer
 from PyQt6.QtCore import pyqtProperty
 
 from PyQt6.QtWidgets import  QApplication
-from PyQt6 import QtWidgets
-
-import numpy as np
 
 import pyqtgraph as pg
-from enum import Enum
 
 import zss_cmd_pb2 as zss
 import zss_cmd_type_pb2 as zss_type
 
+import network
 from datetime import datetime
 
 fdbNeedPlotName = []
@@ -45,6 +42,12 @@ MC_PORT = 13134
 SEND_PORT = 14234
 SINGLE_PORT = 14134
 
+
+def resource_path(rel_path: str) -> str:
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, rel_path)
+    return os.path.join(os.path.abspath("."), rel_path)
+
 # udp receiver for multicast
 def get_ip_address():
     hostname = socket.gethostname()
@@ -53,78 +56,6 @@ def get_ip_address():
 
 local_ip=get_ip_address()
 print("本机IP地址是:", local_ip)
-class UdpReceiver:
-    def __init__(self, multicast_ip, port,_cb=None):
-        self.multicast_ip = multicast_ip
-        self.port = port
-        self._cb = _cb
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-        self.sock.bind(('', self.port))
-        mreq = struct.pack("4sl", socket.inet_aton(self.multicast_ip), socket.INADDR_ANY)
-        self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-        self.sock.settimeout(0.2)
-    def receive(self,stop_token):
-        while True:
-            if stop_token():
-                break
-            try:
-                data, addr = self.sock.recvfrom(65535)
-                if self._cb is not None:
-                    self._cb(data,addr)
-            except socket.timeout:
-                pass
-
-class PointToPointUdpReceiver:
-    def __init__(self, local_ip, local_port,target_ip,_cb):
-        self.local_ip = local_ip
-        self.local_port = local_port
-        self.target_ip = target_ip
-        self.receive_flag = False
-        self._cb =_cb
-        # Create a UDP socket
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Bind the socket to the local address and port
-        self.sock.bind((self.local_ip, self.local_port))
-        # Set timeout for socket operations (optional)
-        self.sock.settimeout(0.5)
-        self.robot_status = zss.Robot_Status()
-    def pointreceive(self, stop_token):
-        while True:
-            if stop_token():
-                break
-            if self.target_ip is None:
-                #print("no ip")
-                continue
-            try:
-                # print("目标ip:",self.target_ip)
-                data, addr = self.sock.recvfrom(65535)
-                self.parse_data(data,addr)
-                if addr[0] == self.target_ip:  # Check if the message is from the target IP
-                    self.robot_status.ParseFromString(data)
-                    # print("true infrared:",self.robot_status.infrared)
-                    if self._cb is not None:
-                        self._cb(self.robot_status)
-                    #time.sleep(0.01)
-                    # print("get ip")
-
-            except socket.timeout:
-                pass
-
-
-    def parse_data(self,data,addr):
-        self.robot_status = zss.Robot_Status()
-        # print(self.robot_status)
-        self.robot_status.ParseFromString(data)
-        # print(self.robot_status.robot_id)
-        # print(self.robot_status.infrared)
-
-class UdpSender:
-    def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    def send(self, msg, addr):
-        self.sock.sendto(msg, addr)
-
 class InfoReceiver:
     info = {}
     selected = {}
@@ -134,14 +65,14 @@ class InfoReceiver:
     def _cb(self,data,addr):
         pb_info = zss.Multicast_Status()
         pb_info.ParseFromString(data)
-        pb_info.ip = int(addr[0].split(".")[3])
-        self.info[addr[0]] = pb_info  
+        pb_info.ip = int(addr.split(".")[3])
+        self.info[addr] = pb_info  
         if self.info_cb is not None:
             self.info_cb(pb_info.robot_id,pb_info)
                      
 class CmdSender:
     def __init__(self):
-        self.udpSender = UdpSender()
+        self.udpSender = network.QtUdpSender()
         self.pb_data = zss.Robot_Command()
         self.pb_data.robot_id = -1
         self.pb_data.kick_mode = zss.Robot_Command.KickMode.NONE
@@ -159,6 +90,9 @@ class CmdSender:
         self.pb_data.angle_pid.append(int(0*1000))
         self.pb_data.angle_pid.append(int(0.8*1000))
         self.pb_data.need_change_team = False
+        self.pb_data.need_change_id = False
+        self.pb_data.team_new = zss.Team.UNKNOWN
+        self.pb_data.id_new = -1
         self.pb_data.isdebug = True
         pass
     # updateCommandParams(int robotID,double velX,double velY,double velR,double ctrl,bool mode,bool shoot,double power)
@@ -182,32 +116,36 @@ class CmdSender:
         self.pb_data.cmd_vel.use_imu = use_imu
         # self.pb_data.cmd_vel.imu_theta = angle*3.1415926/180.0
         self.pb_data.comm_type = zss.Robot_Command.CommType.UDP_WIFI
+        self.pb_data.angle_pid.clear()
         self.pb_data.angle_pid.append(int(6.5*1000.0))
         self.pb_data.angle_pid.append(int(0*1000.0))
         self.pb_data.angle_pid.append(int(0.5*1000.0))
+        self.pb_data.wheel_pid.clear()
         self.pb_data.wheel_pid.append(int(0.1*1000.0))
         self.pb_data.wheel_pid.append(int(0.6*1000.0))
         self.pb_data.wheel_pid.append(int(0*1000.0))
         self.pb_data.isdebug = True
           
-    def onlyChangeTeam(self,need_change_team): 
-        self.pb_data.need_change_team = need_change_team
+    def changeTeam(self, team_new):
+        self.pb_data.need_change_team = True
+        self.pb_data.team_new = team_new
         global changeSendTick
-        if need_change_team == True:
-            changeSendTick = 0
-        # print(need_change_team)
-        
-    # print(use_imu,angle)                        
-    #print("updateCommandParams",str(self.pb_data))
+        changeSendTick = 0
+
+    def changeId(self, id_new):
+        self.pb_data.need_change_id = True
+        self.pb_data.id_new = id_new
+        global changeSendTick
+        changeSendTick = 0
 
     def sendCommand(self,infoReceiver:InfoReceiver):
         # print("sendCommand",str(self.pb_data))
         global changeSendTick
-        if self.pb_data.need_change_team == False:
-            tmp = changeSendTick
-            tmp += 1
-            changeSendTick = tmp
-            pass
+        if self.pb_data.need_change_team or self.pb_data.need_change_id:
+            changeSendTick += 1
+            if changeSendTick >= 5:
+                self.pb_data.need_change_team = False
+                self.pb_data.need_change_id = False
                     
         # print("debug")
         selectedDir = infoReceiver.selected
@@ -225,10 +163,10 @@ class CmdSender:
             self.pb_data.robot_id = id
             # print("sendIp: ",info.ip)
             # Serialize    
-            # print("send",self.pb_data.need_change_team)    
+            # print("send",self.pb_data.need_change_team, self.pb_data.need_change_id)
             data = self.pb_data.SerializeToString()
             # print(len(data))
-            self.udpSender.send(data,(ipForward_t+"."+format(info.ip),SEND_PORT))
+            self.udpSender.send(data, ipForward_t+"."+format(info.ip), SEND_PORT)
 
 
 #inforeceiver的拿到了一个paintinfo的回调函数 udprecv开了一个线程 一直执行receive 收到了就执行inforeceriver的本身的回调函数填数组 再执行paintinfo
@@ -242,8 +180,6 @@ class InfoViewer(QQuickPaintedItem):
     update_control=0
     only_one = True
     initFinish = False
-    last_need_change_team = False
-    need_change_team = False
     infoReceiverLock = threading.Lock()
     control_all = False
     control_all_which_team = False
@@ -255,15 +191,18 @@ class InfoViewer(QQuickPaintedItem):
         self.receiverNeedStop = False
         self.infoReceiver = InfoReceiver(self.getNewInfo)
         self.cmdSender = CmdSender()
-        udpRecv = UdpReceiver(MC_ADDR,MC_PORT,self.infoReceiver._cb) #PAIN
-        #self.pointtopointRecv =PointToPointUdpReceiver(local_ip,SINGLE_PORT,None)
-        self.pointtopointRecv = PointToPointUdpReceiver(local_ip, SINGLE_PORT, None,self.paint_signal)
-        t = threading.Thread(target=udpRecv.receive,args=(lambda : self.receiverNeedStop,))
-        t.start()
-        t1 = threading.Thread(target=self.pointtopointRecv.pointreceive,args=(lambda : self.receiverNeedStop,))
-        t1.start()
-        t2 = threading.Thread(target=self.paintAll,args=(lambda : self.receiverNeedStop,))
-        t2.start()
+
+        self.udpRecv = network.QtMulticastReceiver(MC_ADDR, MC_PORT)
+        self.udpRecv.dataReceived.connect(self.infoReceiver._cb)
+
+        self.pointtopointRecv = network.QtPointToPointReceiver('0.0.0.0', SINGLE_PORT)
+        self.pointtopointRecv.dataReceived.connect(self.parse_and_paint_signal)
+
+        self.ifDraw = [False] * 32
+        self.paintTimer = QTimer()
+        self.paintTimer.timeout.connect(self.paintAllCheck)
+        self.paintTimer.start(200)
+
         self.painter = QPainter()
         self.image = QImage(QSize(int(self.width()),int(self.height())),QImage.Format.Format_ARGB32_Premultiplied)
         self.ready = False
@@ -272,50 +211,42 @@ class InfoViewer(QQuickPaintedItem):
         self.refresh.connect(self.paintRefresh)
         self.initFinish = True
                 
-    def paintAll(self, stop_token):
-        ifDraw = [False]*32
-        while(True):
-            if stop_token():
-                break
-            onlineTick_t = onlineTick
-            now = int(datetime.now().timestamp() * 1000)  
-            
-            for i in range(32):
-                infoDir = self.infoReceiver.info
-                selectDir = self.infoReceiver.selected
-                # print(self.infoReceiver.selected)
-                # print(selectDir)
-                # print(onlineTick_t[i],i)
-                if now - onlineTick_t[i] < 2000:
-                    for info in list(infoDir.values()):
-                        if (info.team-1)*16 + info.robot_id == i:
-                            self.drawSignal.emit(i%16,info)
-                            ifDraw[i] = True
-                else:
-                    if ifDraw[i] == True:
-                        self.refresh.emit(i)    
-                        info_to_remove = None
-                        for key,info in infoDir.items():
-                            if info.robot_id+(info.team-1)*16 == i:
-                                info_to_remove = key
-                        
-                        if info_to_remove != None:
-                            infoDir.pop(info_to_remove)
-                            self.infoReceiver.info = infoDir
-                                
-                        # print(selectDir)
-                        if i in selectDir.keys():
-                            selectDir.pop(i)
+    def parse_and_paint_signal(self, data, ip_str):
+        if self.ready and self.painter.isActive():
+            robot_status = zss.Robot_Status()
+            robot_status.ParseFromString(data)
+            self.statusSingnal.emit(robot_status)
+
+    def paintAllCheck(self):
+        onlineTick_t = onlineTick
+        now = int(datetime.now().timestamp() * 1000)  
+        
+        for i in range(32):
+            infoDir = self.infoReceiver.info
+            selectDir = self.infoReceiver.selected
+            if now - onlineTick_t[i] < 2000:
+                for info in list(infoDir.values()):
+                    if (info.team-1)*16 + info.robot_id == i:
+                        self.drawSignal.emit(i%16,info)
+                        self.ifDraw[i] = True
+            else:
+                if self.ifDraw[i] == True:
+                    self.refresh.emit(i)    
+                    info_to_remove = None
+                    for key,info in infoDir.items():
+                        if info.robot_id+(info.team-1)*16 == i:
+                            info_to_remove = key
+                    
+                    if info_to_remove != None:
+                        infoDir.pop(info_to_remove)
+                        self.infoReceiver.info = infoDir
                             
-                        self.infoReceiver.selected = selectDir
-                        #     print(t)
-                        #     infoDir.pop(t)  
-                        #     self.infoReceiver.info = infoDir 
-                        # print(infoDir)
+                    if i in selectDir.keys():
+                        selectDir.pop(i)
                         
-                        ifDraw[i] = False 
-                    pass
-            time.sleep(0.2)
+                    self.infoReceiver.selected = selectDir
+                    self.ifDraw[i] = False 
+
                 
     @pyqtSlot()
     def close(self):
@@ -537,10 +468,9 @@ class InfoViewer(QQuickPaintedItem):
                 length += 1    
                        
         global changeSendTick
-        # tmp = changeSendTick
-        # print("tick",tmp)
-        if changeSendTick == 5:
+        if changeSendTick == 5 and self.cmdSender.pb_data.need_change_team == False and self.cmdSender.pb_data.need_change_id == False:
             self.infoReceiver.selected.clear()
+            changeSendTick = 0
         
         self.cmdSender.sendCommand(self.infoReceiver)
         
@@ -566,7 +496,7 @@ class InfoViewer(QQuickPaintedItem):
             self.painter.setFont(QFont('Helvetica', 11))
             self.painter.setPen(QColor(0,0,0))
 
-            if self.pointtopointRecv.receive_flag is True:
+            if self.pointtopointRecv.receive_flag:
 
                 battery_str = "{:.1f}".format(info.battery/10.0)
                 capacitance_str = "{:.1f}".format(info.capacitance/10.0)
@@ -632,26 +562,30 @@ class InfoViewer(QQuickPaintedItem):
     @pyqtSlot(bool)    
     def car_num(self,only_one):
         self.only_one = only_one
-        
-    @pyqtProperty(bool)
-    def needChangeTeam(self):
-        return self.need_change_team
 
-    @needChangeTeam.setter
-    def needChangeTeam(self,value):
-        self.last_need_change_team = self.need_change_team
-        self.need_change_team = value
-        if self.need_change_team == True and self.last_need_change_team == False:
-            self.pointtopointRecv.receive_flag = False
-            self.infoReceiver.selected.clear()
-            self.cmdSender.onlyChangeTeam(self.need_change_team)
-            # print("qml",self.need_change_team)
-            for info in self.infoReceiver.info.values():
-                self.infoReceiver.selected[info.robot_id+(info.team-1)*16] = info
-                # print("info",info.robot_id+(info.team-1)*16)
-        elif self.need_change_team == False and self.last_need_change_team == True:
-            self.cmdSender.onlyChangeTeam(self.need_change_team)
-            # print("qml",self.need_change_team)
+    @pyqtSlot(int)
+    def changeTeam(self, team_new):
+        if team_new not in (zss.Team.BLUE, zss.Team.YELLOW):
+            return
+
+        self.pointtopointRecv.receive_flag = False
+        self.infoReceiver.selected.clear()
+        for info in self.infoReceiver.info.values():
+            self.infoReceiver.selected[info.robot_id + (info.team - 1) * 16] = info
+
+        self.cmdSender.changeTeam(team_new)
+
+    @pyqtSlot(int)
+    def changeId(self, id_new):
+        if id_new < 0 or id_new > 15:
+            return
+
+        self.pointtopointRecv.receive_flag = False
+        self.infoReceiver.selected.clear()
+        for info in self.infoReceiver.info.values():
+            self.infoReceiver.selected[info.robot_id + (info.team - 1) * 16] = info
+
+        self.cmdSender.changeId(id_new)
          
         
     @pyqtSlot()    
@@ -725,13 +659,20 @@ def is_nested_field_exists(field_path: list[str], message_class) -> bool:
     return True
 
 if __name__ == '__main__':
+    # AppImage environments may not provide usable GLX/EGL; force software rendering.
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+    os.environ.setdefault("QT_OPENGL", "software")
+    os.environ.setdefault("QT_XCB_GL_INTEGRATION", "none")
+    os.environ.setdefault("QSG_RHI_BACKEND", "software")
+    os.environ.setdefault("QT_QUICK_BACKEND", "software")
+    os.environ["QT_QUICK_CONTROLS_STYLE"] = "Fusion"
     app = QApplication(sys.argv)
     engine = QQmlApplicationEngine()
     qmlRegisterType(InfoViewer, 'ZSS', 1, 0, 'InfoViewer')
     
     needPlotTmp = True
         
-    with open('zcrazy.txt','r') as file:
+    with open(resource_path('zcrazy.txt'),'r') as file:
         for line in file:
             if needPlotTmp and line.strip() != 'true:':
                 needPlotTmp = False  
@@ -804,7 +745,7 @@ if __name__ == '__main__':
     engine.quit.connect(app.quit)
     # 加载QML文件
     try:
-        engine.load('main.qml')
+        engine.load(resource_path('main.qml'))
     except Exception as e:
         print("Failed to load QML:", e)
         sys.exit(1)

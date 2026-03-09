@@ -3,10 +3,9 @@ import QtQuick.Controls
 import ZSS as ZSS
 ApplicationWindow {
     visible: true
-    width: 1280
-    height: 600
+    width: 1350
+    height: 700
     title: "Zrazy"
-    property bool needChangeTeamTickEnable: false
     Timer{
         id:timer;
         interval:8;
@@ -21,13 +20,6 @@ ApplicationWindow {
         }
     }
 
-    Timer {
-        id: resetTimer
-        interval: 1000  // 1秒自动恢复
-        repeat: false
-        onTriggered: needChangeTeamTickEnable = false
-    }
-
     onClosing: {
         infoViewer.close();
     }
@@ -35,18 +27,10 @@ ApplicationWindow {
         width:parent.width-infoViewerRect.width
         height:parent.height
         anchors.left:parent.left
-        color:"#222"
+        color: "transparent"
 
         focus: true
-        Keys.onPressed: (event) => {
-            if (event.key === Qt.Key_T) {  // 示例使用空格键
-                needChangeTeamTickEnable = true
-                resetTimer.restart()
-                event.accepted = true
-            }
-        }
         UI{
-            needChangeTeamState : needChangeTeamTickEnable
             cmdSender:infoViewer
         }
     }
@@ -55,13 +39,12 @@ ApplicationWindow {
         width:500
         height:parent.height
         anchors.right:parent.right
-        color:"#444"
+        color:"#333333"
         ZSS.InfoViewer{
             id: infoViewer
             anchors.fill:parent
             onWidthChanged: this.resize(width,height)
             onHeightChanged: this.resize(width,height)
-            needChangeTeam:needChangeTeamTickEnable
         }
     }
 
